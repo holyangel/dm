@@ -30,20 +30,20 @@ unsigned long boosted_cpu_util(int cpu);
 #define cpufreq_disable_fast_switch(x)
 
 #define UP_RATE_LIMIT				1000
-#define DOWN_RATE_LIMIT				5000
+#define DOWN_RATE_LIMIT				20000
 #define BIT_SHIFT_1 				9
 #define BIT_SHIFT_2 				9
 #define TARGET_LOAD_1				32
 #define TARGET_LOAD_2				73
 
 #define UP_RATE_LIMIT_BIGC			1000
-#define DOWN_RATE_LIMIT_BIGC		5000
+#define DOWN_RATE_LIMIT_BIGC			5000
 #define BIT_SHIFT_1_BIGC 			10
 #define BIT_SHIFT_2_BIGC 			6
 #define TARGET_LOAD_1_BIGC 			24
 #define TARGET_LOAD_2_BIGC 			71
 
-#define HXGOV_KTHREAD_PRIORITY		25
+#define HXGOV_KTHREAD_PRIORITY		50
 
 struct hxgov_tunables {
 	struct gov_attr_set attr_set;
