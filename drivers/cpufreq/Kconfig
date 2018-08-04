@@ -332,6 +332,12 @@ config CPU_FREQ_GOV_BLU_SCHEDUTIL
 	  be called cpufreq_blu_schedutil.
 	  If in doubt, say N.
 
+config FINGERPRINT_BOOST
+	bool "Fingerprint Boost"
+	default y
+	help
+	  Boosts available CPUs to max frequency on fingerprint sensor input.
+
 comment "CPU frequency scaling drivers"
 
 config CPU_BOOST
