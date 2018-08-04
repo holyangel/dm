@@ -832,6 +832,6 @@ struct cpufreq_governor cpufreq_gov_blu_schedutil = {
 
 static int __init sugov_register(void)
 {
-	return cpufreq_register_governor(&blu_schedutil_gov);
+	return cpufreq_register_governor(&cpufreq_gov_blu_schedutil);
 }
 fs_initcall(sugov_register);
