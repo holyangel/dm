@@ -35,8 +35,7 @@ unsigned long boosted_cpu_util(int cpu);
 #define BIT_SHIFT_2 				9
 #define TARGET_LOAD_1				32
 #define TARGET_LOAD_2				73
-#define DEFAULT_SUSPEND_MAX_FREQ_GOLD 729600
-#define DEFAULT_SUSPEND_MAX_FREQ_SILVER 748800
+#define DEFAULT_SUSPEND_MAX_FREQ 0
 #define DEFAULT_SUSPEND_CAPACITY_FACTOR 10
 #define UP_RATE_LIMIT_BIGC			1000
 #define DOWN_RATE_LIMIT_BIGC			20000
@@ -1013,8 +1012,8 @@ static int dugov_init(struct cpufreq_policy *policy)
 	get_tunables_data(tunables, policy);
 	
 	tunables->iowait_boost_enable = policy->iowait_boost_enable;
-	tunables->silver_suspend_max_freq = DEFAULT_SUSPEND_MAX_FREQ_SILVER;
-	tunables->gold_suspend_max_freq = DEFAULT_SUSPEND_MAX_FREQ_GOLD;
+	tunables->silver_suspend_max_freq = DEFAULT_SUSPEND_MAX_FREQ;
+	tunables->gold_suspend_max_freq = DEFAULT_SUSPEND_MAX_FREQ;
 	tunables->suspend_capacity_factor = DEFAULT_SUSPEND_CAPACITY_FACTOR;
 
 	policy->governor_data = sg_policy;
