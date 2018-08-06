@@ -34,7 +34,7 @@ unsigned long boosted_cpu_util(int cpu);
 #define DEFAULT_SUSPEND_MAX_FREQ_SILVER 748800
 #define DEFAULT_SUSPEND_CAPACITY_FACTOR 10
 #define UP_RATE_LIMIT_US 1000
-#define DOWN_RATE_LIMIT_US 5000
+#define DOWN_RATE_LIMIT_US 20000
 
 struct eugov_tunables {
 	struct gov_attr_set attr_set;
