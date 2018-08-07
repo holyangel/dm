@@ -30,7 +30,7 @@ unsigned long boosted_cpu_util(int cpu);
 #define cpufreq_disable_fast_switch(x)
 
 #define UP_RATE_LIMIT				1000
-#define DOWN_RATE_LIMIT				20000
+#define DOWN_RATE_LIMIT				2000
 #define BIT_SHIFT_1 				9
 #define BIT_SHIFT_2 				9
 #define TARGET_LOAD_1				32
@@ -38,7 +38,7 @@ unsigned long boosted_cpu_util(int cpu);
 #define DEFAULT_SUSPEND_MAX_FREQ 0
 #define DEFAULT_SUSPEND_CAPACITY_FACTOR 10
 #define UP_RATE_LIMIT_BIGC			1000
-#define DOWN_RATE_LIMIT_BIGC			20000
+#define DOWN_RATE_LIMIT_BIGC			5000
 #define BIT_SHIFT_1_BIGC 			10
 #define BIT_SHIFT_2_BIGC 			6
 #define TARGET_LOAD_1_BIGC 			24
