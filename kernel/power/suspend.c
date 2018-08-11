@@ -408,7 +408,9 @@ static int suspend_enter(suspend_state_t state, bool *wakeup)
  Platform_wake:
 	platform_resume_noirq(state);
 /*huruihuan add for speed up resume*/
+#ifdef CONFIG_QUICK_THAW_FINGERPRINTD
 	thaw_fingerprintd();
+#endif
 	dpm_resume_noirq(PMSG_RESUME);
 
  Platform_early_resume:
