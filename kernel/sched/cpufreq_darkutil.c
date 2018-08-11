@@ -1,4 +1,4 @@
-/* Based on Electroutil
+/*
  * CPUFreq governor based on scheduler-provided CPU utilization data.
  *
  * Copyright (C) 2016, Intel Corporation
@@ -25,32 +25,28 @@ unsigned long boosted_cpu_util(int cpu);
 
 /* Stub out fast switch routines present on mainline to reduce the backport
  * overhead. */
-
-/* Overall Tuneables */
 #define cpufreq_driver_fast_switch(x, y) 0
 #define cpufreq_enable_fast_switch(x)
 #define cpufreq_disable_fast_switch(x)
-#define LATENCY_MULTIPLIER	    (1000)
+#define LATENCY_MULTIPLIER			(2000)
 #define dugov_KTHREAD_PRIORITY	50
-#define SILVER_SUSPEND_MAX_FREQ 300000
-#define GOLD_SUSPEND_MAX_FREQ 300000
-#define SUSPEND_CAPACITY_FACTOR 10
+#define DEFAULT_SUSPEND_MAX_FREQ_SILVER	1036800
+#define DEFAULT_SUSPEND_MAX_FREQ_GOLD	1056000
+#define DEFAULT_SUSPEND_CAPACITY_FACTOR 10
 
-/* Little Cluster */
-#define UP_RATE_LIMIT	2000
-#define DOWN_RATE_LIMIT	5000
-#define BIT_SHIFT_1	10
-#define BIT_SHIFT_2	6
-#define TARGET_LOAD_1	24
-#define TARGET_LOAD_2	71
+#define UP_RATE_LIMIT				1000
+#define DOWN_RATE_LIMIT				5000
+#define BIT_SHIFT_1 				9
+#define BIT_SHIFT_2 				9
+#define TARGET_LOAD_1				32
+#define TARGET_LOAD_2				73
 
-/* Big Cluster */
-#define UP_RATE_LIMIT_BIGC	2000
-#define DOWN_RATE_LIMIT_BIGC	5000
-#define BIT_SHIFT_1_BIGC	9
-#define BIT_SHIFT_2_BIGC	9
-#define TARGET_LOAD_1_BIGC	32
-#define TARGET_LOAD_2_BIGC	73
+#define UP_RATE_LIMIT_BIGC			1000
+#define DOWN_RATE_LIMIT_BIGC			5000
+#define BIT_SHIFT_1_BIGC 			10
+#define BIT_SHIFT_2_BIGC 			6
+#define TARGET_LOAD_1_BIGC 			24
+#define TARGET_LOAD_2_BIGC 			71
 
 struct dugov_tunables {
 	struct gov_attr_set attr_set;
@@ -59,11 +55,11 @@ struct dugov_tunables {
 	bool iowait_boost_enable;
 	unsigned int silver_suspend_max_freq;
 	unsigned int gold_suspend_max_freq;
+	unsigned int suspend_capacity_factor;
 	unsigned int bit_shift1;
 	unsigned int bit_shift2;
 	unsigned int target_load1;
 	unsigned int target_load2;
-	unsigned int suspend_capacity_factor;
 };
 
 struct dugov_policy {
@@ -87,7 +83,6 @@ struct dugov_policy {
 	struct kthread_worker worker;
 	struct task_struct *thread;
 	bool work_in_progress;
-
 	bool need_freq_update;
 };
 
@@ -104,10 +99,15 @@ struct dugov_cpu {
 	unsigned long util;
 	unsigned long max;
 	unsigned int flags;
+	unsigned int cpu;
+
+	/* The field below is for single-CPU policies only. */
+#ifdef CONFIG_NO_HZ_COMMON
+	unsigned long saved_idle_calls;
+#endif
 };
 
 static DEFINE_PER_CPU(struct dugov_cpu, dugov_cpu);
-static DEFINE_PER_CPU(struct dugov_tunables, cached_tunables);
 
 /************************ Governor internals ***********************/
 
@@ -160,22 +160,20 @@ static void dugov_update_commit(struct dugov_policy *du_policy, u64 time,
 	if (dugov_up_down_rate_limit(du_policy, time, next_freq))
 		return;
 
+	if (du_policy->next_freq == next_freq)
+		return;
+
+	du_policy->next_freq = next_freq;
 	du_policy->last_freq_update_time = time;
 
 	if (policy->fast_switch_enabled) {
-		if (du_policy->next_freq == next_freq) {
-			trace_cpu_frequency(policy->cur, smp_processor_id());
-			return;
-		}
-		du_policy->next_freq = next_freq;
 		next_freq = cpufreq_driver_fast_switch(policy, next_freq);
 		if (next_freq == CPUFREQ_ENTRY_INVALID)
 			return;
 
 		policy->cur = next_freq;
 		trace_cpu_frequency(next_freq, smp_processor_id());
-	} else if (du_policy->next_freq != next_freq) {
-		du_policy->next_freq = next_freq;
+	} else {
 		du_policy->work_in_progress = true;
 		irq_work_queue(&du_policy->irq_work);
 	}
@@ -223,6 +221,7 @@ static unsigned int get_next_freq(struct dugov_policy *du_policy,
 {
 	struct cpufreq_policy *policy = du_policy->policy;
 	struct dugov_tunables *tunables = du_policy->tunables;
+	unsigned long load = 100 * util / max;
 	unsigned int freq = arch_scale_freq_invariant() ?
 				policy->cpuinfo.max_freq : policy->cur;
 	unsigned int capacity_factor, silver_max_freq, gold_max_freq;
@@ -234,45 +233,36 @@ static unsigned int get_next_freq(struct dugov_policy *du_policy,
 		max = max * (capacity_factor + 1) / capacity_factor;
 	}
 
+	if(load < tunables->target_load1){
+		freq = (freq + (freq >> tunables->bit_shift1)) * util / max;
+	} else if (load >= tunables->target_load1 && load < tunables->target_load2){
+		freq = freq * util / max;
+	} else {
+		freq = (freq - (freq >> tunables->bit_shift2)) * util / max;
+	}
+
 	switch(policy->cpu){
 	case 0:
 	case 1:
 	case 2:
 	case 3:
-		if(state_suspended &&  silver_max_freq > 0 && silver_max_freq < freq) {
-			freq = (freq + (freq >> 2)) * util / max;
+		if(state_suspended &&  silver_max_freq > 0 && silver_max_freq < freq)
 			return silver_max_freq;
-		} else if ((100 * util / max) < tunables->target_load1) {
-			freq = (freq + (freq >> tunables->bit_shift1)) * util / max;
-		} else if ((100 * util / max) >= tunables->target_load1 && (100 * util / max) < tunables->target_load2) { 
-			freq = (freq - (freq >> tunables->bit_shift2)) * util / max;
-		} else {
-			freq = (freq + (freq >> 2)) * util / max;
-		}
 		break;
 	case 4:
-		if(state_suspended && gold_max_freq > 0 && gold_max_freq < freq) {
-			freq = (freq + (freq >> 2)) * util / max;
-			return gold_max_freq;
-		} else if ((100 * util / max) < tunables->target_load1) {
-			freq = (freq + (freq >> tunables->bit_shift1)) * util / max;
-		} else if ((100 * util / max) >= tunables->target_load1 && (100 * util / max) < tunables->target_load2) { 
-			freq = (freq - (freq >> tunables->bit_shift2)) * util / max;
-		} else {
-			freq = (freq + (freq >> 2)) * util / max;
-		}
-		break;
 	case 5:
+		if(state_suspended && gold_max_freq > 0 && gold_max_freq < freq)
+			return gold_max_freq;
+		break;
 	case 6:
 	case 7:
-		if(state_suspended) {
-			freq = (freq + (freq >> 2)) * util / max;
+		if(state_suspended)
 			return policy->min;
-		}
 		break;
 	default:
 		BUG();
-}
+	}
+
 	if (freq == du_policy->cached_raw_freq && du_policy->next_freq != UINT_MAX)
 		return du_policy->next_freq;
 	du_policy->cached_raw_freq = freq;
@@ -296,40 +286,84 @@ static void dugov_get_util(unsigned long *util, unsigned long *max, u64 time)
 	rt = (rt * max_cap) >> SCHED_CAPACITY_SHIFT;
 
 	*util = min(rq->cfs.avg.util_avg + rt, max_cap);
+
 	if (!walt_disabled && sysctl_sched_use_walt_cpu_util)
 		*util = boosted_cpu_util(cpu);
+
 	*max = max_cap;
 }
 
 static void dugov_set_iowait_boost(struct dugov_cpu *du_cpu, u64 time,
 				   unsigned int flags)
 {
+	struct dugov_policy *du_policy = du_cpu->du_policy;
+
+	if (!du_policy->tunables->iowait_boost_enable)
+		return;
+
 	if (flags & SCHED_CPUFREQ_IOWAIT) {
-		du_cpu->iowait_boost = du_cpu->iowait_boost_max;
+		if (du_cpu->iowait_boost_pending)
+			return;
+
+		du_cpu->iowait_boost_pending = true;
+
+		if (du_cpu->iowait_boost) {
+			du_cpu->iowait_boost <<= 1;
+			if (du_cpu->iowait_boost > du_cpu->iowait_boost_max)
+				du_cpu->iowait_boost = du_cpu->iowait_boost_max;
+		} else {
+			du_cpu->iowait_boost = du_cpu->du_policy->policy->min;
+		}
 	} else if (du_cpu->iowait_boost) {
 		s64 delta_ns = time - du_cpu->last_update;
 
 		/* Clear iowait_boost if the CPU apprears to have been idle. */
-		if (delta_ns > TICK_NSEC)
+		if (delta_ns > TICK_NSEC) {
 			du_cpu->iowait_boost = 0;
+			du_cpu->iowait_boost_pending = false;
+		}
 	}
 }
 
 static void dugov_iowait_boost(struct dugov_cpu *du_cpu, unsigned long *util,
 			       unsigned long *max)
 {
-	unsigned long boost_util = du_cpu->iowait_boost;
-	unsigned long boost_max = du_cpu->iowait_boost_max;
+	unsigned int boost_util, boost_max;
 
-	if (!boost_util)
+	if (!du_cpu->iowait_boost)
 		return;
+
+	if (du_cpu->iowait_boost_pending) {
+		du_cpu->iowait_boost_pending = false;
+	} else {
+		du_cpu->iowait_boost >>= 1;
+		if (du_cpu->iowait_boost < du_cpu->du_policy->policy->min) {
+			du_cpu->iowait_boost = 0;
+			return;
+		}
+	}
+
+	boost_util = du_cpu->iowait_boost;
+	boost_max = du_cpu->iowait_boost_max;
 
 	if (*util * boost_max < *max * boost_util) {
 		*util = boost_util;
 		*max = boost_max;
 	}
-	du_cpu->iowait_boost >>= 1;
 }
+
+#ifdef CONFIG_NO_HZ_COMMON
+static bool dugov_cpu_is_busy(struct dugov_cpu *du_cpu)
+{
+	unsigned long idle_calls = tick_nohz_get_idle_calls();
+	bool ret = idle_calls == du_cpu->saved_idle_calls;
+
+	du_cpu->saved_idle_calls = idle_calls;
+	return ret;
+}
+#else
+static inline bool dugov_cpu_is_busy(struct dugov_cpu *du_cpu) { return false; }
+#endif /* CONFIG_NO_HZ_COMMON */
 
 static void dugov_update_single(struct update_util_data *hook, u64 time,
 				unsigned int flags)
@@ -339,6 +373,7 @@ static void dugov_update_single(struct update_util_data *hook, u64 time,
 	struct cpufreq_policy *policy = du_policy->policy;
 	unsigned long util, max;
 	unsigned int next_f;
+	bool busy;
 
 	dugov_set_iowait_boost(du_cpu, time, flags);
 	du_cpu->last_update = time;
@@ -346,36 +381,36 @@ static void dugov_update_single(struct update_util_data *hook, u64 time,
 	if (!dugov_should_update_freq(du_policy, time))
 		return;
 
+	busy = dugov_cpu_is_busy(du_cpu);
+
 	if (flags & SCHED_CPUFREQ_DL) {
-		next_f = get_next_freq(du_policy, util, policy->cpuinfo.max_freq);
+		next_f = policy->cpuinfo.max_freq;
 	} else {
 		dugov_get_util(&util, &max, time);
 		dugov_iowait_boost(du_cpu, &util, &max);
 		next_f = get_next_freq(du_policy, util, max);
+		/*
+		 * Do not reduce the frequency if the CPU has not been idle
+		 * recently, as the reduction is likely to be premature then.
+		 */
+		if (busy && next_f < du_policy->next_freq)
+			next_f = du_policy->next_freq;
 	}
 	dugov_update_commit(du_policy, time, next_f);
 }
 
-static unsigned int dugov_next_freq_shared(struct dugov_cpu *du_cpu,
-					   unsigned long util, unsigned long max,
-					   unsigned int flags)
+static unsigned int dugov_next_freq_shared(struct dugov_cpu *du_cpu, u64 time)
 {
 	struct dugov_policy *du_policy = du_cpu->du_policy;
 	struct cpufreq_policy *policy = du_policy->policy;
-	u64 last_freq_update_time = du_policy->last_freq_update_time;
+	unsigned long util = 0, max = 1;
 	unsigned int j;
 
-	dugov_iowait_boost(du_cpu, &util, &max);
-
 	for_each_cpu(j, policy->cpus) {
-		struct dugov_cpu *j_du_cpu;
+		struct dugov_cpu *j_du_cpu = &per_cpu(dugov_cpu, j);
 		unsigned long j_util, j_max;
 		s64 delta_ns;
 
-		if (j == smp_processor_id())
-			continue;
-
-		j_du_cpu = &per_cpu(dugov_cpu, j);
 		/*
 		 * If the CPU utilization was last updated before the previous
 		 * frequency update and the time elapsed between the last update
@@ -383,13 +418,15 @@ static unsigned int dugov_next_freq_shared(struct dugov_cpu *du_cpu,
 		 * enough, don't take the CPU into account as it probably is
 		 * idle now (and clear iowait_boost for it).
 		 */
-		delta_ns = last_freq_update_time - j_du_cpu->last_update;
+		delta_ns = time - j_du_cpu->last_update;
 		if (delta_ns > TICK_NSEC) {
 			j_du_cpu->iowait_boost = 0;
+			j_du_cpu->iowait_boost_pending = false;
 			continue;
 		}
 		if (j_du_cpu->flags & SCHED_CPUFREQ_DL)
-			return policy->cpuinfo.max_freq;;
+			return policy->cpuinfo.max_freq;
+
 		j_util = j_du_cpu->util;
 		j_max = j_du_cpu->max;
 		if (j_util * max > j_max * util) {
@@ -398,7 +435,6 @@ static unsigned int dugov_next_freq_shared(struct dugov_cpu *du_cpu,
 		}
 
 		dugov_iowait_boost(j_du_cpu, &util, &max);
-
 	}
 
 	return get_next_freq(du_policy, util, max);
@@ -416,12 +452,6 @@ static void dugov_update_shared(struct update_util_data *hook, u64 time,
 
 	raw_spin_lock(&du_policy->update_lock);
 
-	/* CPU is entering IDLE, reset flags without triggering an update */
-	if (flags & SCHED_IDLE) {
-		du_cpu->flags = 0;
-		goto done;
-	}
-
 	du_cpu->util = util;
 	du_cpu->max = max;
 	du_cpu->flags = flags;
@@ -430,11 +460,14 @@ static void dugov_update_shared(struct update_util_data *hook, u64 time,
 	du_cpu->last_update = time;
 
 	if (dugov_should_update_freq(du_policy, time)) {
-		next_f = dugov_next_freq_shared(du_cpu, util, max, flags);
+		if (flags & SCHED_CPUFREQ_DL)
+			next_f = du_policy->policy->cpuinfo.max_freq;
+		else
+			next_f = dugov_next_freq_shared(du_cpu, time);
+
 		dugov_update_commit(du_policy, time, next_f);
 	}
 
-done:
 	raw_spin_unlock(&du_policy->update_lock);
 }
 
@@ -568,34 +601,6 @@ static ssize_t iowait_boost_enable_store(struct gov_attr_set *attr_set,
 	return count;
 }
 
-static ssize_t bit_shift1_show(struct gov_attr_set *attr_set, char *buf)
-{
-	struct dugov_tunables *tunables = to_dugov_tunables(attr_set);
-
-	return sprintf(buf, "%u\n", tunables->bit_shift1);
-}
-
-static ssize_t bit_shift2_show(struct gov_attr_set *attr_set, char *buf)
-{
-	struct dugov_tunables *tunables = to_dugov_tunables(attr_set);
-
-	return sprintf(buf, "%u\n", tunables->bit_shift2);
-}
-
-static ssize_t target_load1_show(struct gov_attr_set *attr_set, char *buf)
-{
-	struct dugov_tunables *tunables = to_dugov_tunables(attr_set);
-
-	return sprintf(buf, "%u\n", tunables->target_load1);
-}
-
-static ssize_t target_load2_show(struct gov_attr_set *attr_set, char *buf)
-{
-	struct dugov_tunables *tunables = to_dugov_tunables(attr_set);
-
-	return sprintf(buf, "%u\n", tunables->target_load2);
-}
-
 static ssize_t silver_suspend_max_freq_show(struct gov_attr_set *attr_set, char *buf)
 {
 	struct dugov_tunables *tunables = to_dugov_tunables(attr_set);
@@ -666,6 +671,34 @@ static ssize_t suspend_capacity_factor_store(struct gov_attr_set *attr_set,
 	tunables->suspend_capacity_factor = factor;
 
 	return count;
+}
+
+static ssize_t bit_shift1_show(struct gov_attr_set *attr_set, char *buf)
+{
+	struct dugov_tunables *tunables = to_dugov_tunables(attr_set);
+
+	return sprintf(buf, "%u\n", tunables->bit_shift1);
+}
+
+static ssize_t bit_shift2_show(struct gov_attr_set *attr_set, char *buf)
+{
+	struct dugov_tunables *tunables = to_dugov_tunables(attr_set);
+
+	return sprintf(buf, "%u\n", tunables->bit_shift2);
+}
+
+static ssize_t target_load1_show(struct gov_attr_set *attr_set, char *buf)
+{
+	struct dugov_tunables *tunables = to_dugov_tunables(attr_set);
+
+	return sprintf(buf, "%u\n", tunables->target_load1);
+}
+
+static ssize_t target_load2_show(struct gov_attr_set *attr_set, char *buf)
+{
+	struct dugov_tunables *tunables = to_dugov_tunables(attr_set);
+
+	return sprintf(buf, "%u\n", tunables->target_load2);
 }
 
 static ssize_t bit_shift1_store(struct gov_attr_set *attr_set,
@@ -753,11 +786,11 @@ static struct governor_attr down_rate_limit_us = __ATTR_RW(down_rate_limit_us);
 static struct governor_attr iowait_boost_enable = __ATTR_RW(iowait_boost_enable);
 static struct governor_attr silver_suspend_max_freq = __ATTR_RW(silver_suspend_max_freq);
 static struct governor_attr gold_suspend_max_freq = __ATTR_RW(gold_suspend_max_freq);
+static struct governor_attr suspend_capacity_factor = __ATTR_RW(suspend_capacity_factor);
 static struct governor_attr bit_shift1 = __ATTR_RW(bit_shift1);
 static struct governor_attr bit_shift2 = __ATTR_RW(bit_shift2);
 static struct governor_attr target_load1 = __ATTR_RW(target_load1);
 static struct governor_attr target_load2 = __ATTR_RW(target_load2);
-static struct governor_attr suspend_capacity_factor = __ATTR_RW(suspend_capacity_factor);
 
 static struct attribute *dugov_attributes[] = {
 	&up_rate_limit_us.attr,
@@ -765,11 +798,11 @@ static struct attribute *dugov_attributes[] = {
 	&iowait_boost_enable.attr,
 	&silver_suspend_max_freq.attr,
 	&gold_suspend_max_freq.attr,
+	&suspend_capacity_factor.attr,
 	&bit_shift1.attr,
 	&bit_shift2.attr,
 	&target_load1.attr,
 	&target_load2.attr,
-	&suspend_capacity_factor.attr,
 	NULL
 };
 
@@ -793,15 +826,12 @@ static struct dugov_policy *dugov_policy_alloc(struct cpufreq_policy *policy)
 		return NULL;
 
 	du_policy->policy = policy;
-	init_irq_work(&du_policy->irq_work, dugov_irq_work);
-	mutex_init(&du_policy->work_lock);
 	raw_spin_lock_init(&du_policy->update_lock);
 	return du_policy;
 }
 
 static void dugov_policy_free(struct dugov_policy *du_policy)
 {
-	mutex_destroy(&du_policy->work_lock);
 	kfree(du_policy);
 }
 
@@ -819,10 +849,10 @@ static int dugov_kthread_create(struct dugov_policy *du_policy)
 	init_kthread_work(&du_policy->work, dugov_work);
 	init_kthread_worker(&du_policy->worker);
 	thread = kthread_create(kthread_worker_fn, &du_policy->worker,
-				"dugov:%d",
+				"eugov:%d",
 				cpumask_first(policy->related_cpus));
 	if (IS_ERR(thread)) {
-		pr_err("failed to create dugov thread: %ld\n", PTR_ERR(thread));
+		pr_err("failed to create eugov thread: %ld\n", PTR_ERR(thread));
 		return PTR_ERR(thread);
 	}
 
@@ -835,6 +865,9 @@ static int dugov_kthread_create(struct dugov_policy *du_policy)
 
 	du_policy->thread = thread;
 	kthread_bind_mask(thread, policy->related_cpus);
+	init_irq_work(&du_policy->irq_work, dugov_irq_work);
+	mutex_init(&du_policy->work_lock);
+
 	wake_up_process(thread);
 
 	return 0;
@@ -848,6 +881,7 @@ static void dugov_kthread_stop(struct dugov_policy *du_policy)
 
 	flush_kthread_worker(&du_policy->worker);
 	kthread_stop(du_policy->thread);
+	mutex_destroy(&du_policy->work_lock);
 }
 
 static struct dugov_tunables *dugov_tunables_alloc(struct dugov_policy *du_policy)
@@ -871,90 +905,9 @@ static void dugov_tunables_free(struct dugov_tunables *tunables)
 	kfree(tunables);
 }
 
-static void store_tunables_data(struct dugov_tunables *tunables,
-		struct cpufreq_policy *policy)
-{
-	struct dugov_tunables *ptunables;
-	unsigned int cpu = cpumask_first(policy->related_cpus);
-
-	ptunables = &per_cpu(cached_tunables, cpu);
-	if (!ptunables)
-		return;
-	ptunables->up_rate_limit_us = tunables->up_rate_limit_us;
-	ptunables->down_rate_limit_us = tunables->down_rate_limit_us;
-	ptunables->bit_shift1 = tunables->bit_shift1;
-	ptunables->bit_shift2 = tunables->bit_shift2;
-	ptunables->target_load1 = tunables->target_load1;
-	ptunables->target_load2 = tunables->target_load2;
-	ptunables->silver_suspend_max_freq = tunables->silver_suspend_max_freq;
-	ptunables->gold_suspend_max_freq = tunables->gold_suspend_max_freq;
-	ptunables->suspend_capacity_factor = tunables->suspend_capacity_factor;
-
-	pr_debug("tunables data saved for cpu[%u]\n", cpu);
-}
-
-static void get_tunables_data(struct dugov_tunables *tunables,
-		struct cpufreq_policy *policy)
-{
-	struct dugov_tunables *ptunables;
-	unsigned int lat;
-	unsigned int cpu = cpumask_first(policy->related_cpus);
-
-	ptunables = &per_cpu(cached_tunables, cpu);
-	if (!ptunables)
-		goto initialize;
-
-	if (ptunables->up_rate_limit_us > 0) {
-		tunables->up_rate_limit_us = ptunables->up_rate_limit_us;
-		tunables->down_rate_limit_us = ptunables->down_rate_limit_us;
-		tunables->bit_shift1 = ptunables->bit_shift1;
-		tunables->bit_shift2 = ptunables->bit_shift2;
-		tunables->target_load1 = ptunables->target_load1;
-		tunables->target_load2 = ptunables->target_load2;
-		tunables->silver_suspend_max_freq = ptunables->silver_suspend_max_freq;
-		tunables->gold_suspend_max_freq = ptunables->gold_suspend_max_freq;
-		tunables->suspend_capacity_factor = ptunables->suspend_capacity_factor;
-		pr_debug("tunables data restored for cpu[%u]\n", cpu);
-		goto out;
-	}
-
-initialize:
-	if (cpu < 2){
-		tunables->up_rate_limit_us = UP_RATE_LIMIT;
-		tunables->down_rate_limit_us = DOWN_RATE_LIMIT;
-		tunables->bit_shift1 = BIT_SHIFT_1;
-		tunables->bit_shift2 = BIT_SHIFT_2;
-		tunables->target_load1 = TARGET_LOAD_1;
-		tunables->target_load2 = TARGET_LOAD_2;
-		tunables->silver_suspend_max_freq = SILVER_SUSPEND_MAX_FREQ;
-		tunables->gold_suspend_max_freq = GOLD_SUSPEND_MAX_FREQ;
-		tunables->suspend_capacity_factor = SUSPEND_CAPACITY_FACTOR;
-	} else {
-		tunables->up_rate_limit_us = UP_RATE_LIMIT_BIGC;
-		tunables->down_rate_limit_us = DOWN_RATE_LIMIT_BIGC;
-		tunables->bit_shift1 = BIT_SHIFT_1_BIGC;
-		tunables->bit_shift2 = BIT_SHIFT_2_BIGC;
-		tunables->target_load1 = TARGET_LOAD_1_BIGC;
-		tunables->target_load2 = TARGET_LOAD_2_BIGC;
-		tunables->silver_suspend_max_freq = SILVER_SUSPEND_MAX_FREQ;
-		tunables->gold_suspend_max_freq = GOLD_SUSPEND_MAX_FREQ;
-		tunables->suspend_capacity_factor = SUSPEND_CAPACITY_FACTOR;
-	}
-	tunables->up_rate_limit_us = LATENCY_MULTIPLIER;
-	tunables->down_rate_limit_us = LATENCY_MULTIPLIER;
-	lat = policy->cpuinfo.transition_latency / NSEC_PER_USEC;
-	if (lat) {
-		tunables->up_rate_limit_us *= lat;
-		tunables->down_rate_limit_us *= lat;
-	}
-	
-	pr_debug("tunables data initialized for cpu[%u]\n", cpu);
-out:
-	return;
-}
-
 static int dugov_init(struct cpufreq_policy *policy)
 {
+	unsigned int cpu = cpumask_first(policy->related_cpus);
 	struct dugov_policy *du_policy;
 	struct dugov_tunables *tunables;
 	int ret = 0;
@@ -963,9 +916,13 @@ static int dugov_init(struct cpufreq_policy *policy)
 	if (policy->governor_data)
 		return -EBUSY;
 
+	cpufreq_enable_fast_switch(policy);
+
 	du_policy = dugov_policy_alloc(policy);
-	if (!du_policy)
-		return -ENOMEM;
+	if (!du_policy) {
+		ret = -ENOMEM;
+		goto disable_fast_switch;
+	}
 
 	ret = dugov_kthread_create(du_policy);
 	if (ret)
@@ -990,9 +947,39 @@ static int dugov_init(struct cpufreq_policy *policy)
 		ret = -ENOMEM;
 		goto stop_kthread;
 	}
-	
-	get_tunables_data(tunables, policy);
-	
+
+	if (policy->up_transition_delay_us && policy->down_transition_delay_us) {
+		tunables->up_rate_limit_us = policy->up_transition_delay_us;
+		tunables->down_rate_limit_us = policy->down_transition_delay_us;
+	} else {
+		unsigned int lat;
+
+                tunables->up_rate_limit_us = LATENCY_MULTIPLIER;
+                tunables->down_rate_limit_us = LATENCY_MULTIPLIER;
+		lat = policy->cpuinfo.transition_latency / NSEC_PER_USEC;
+		if (lat) {
+                        tunables->up_rate_limit_us *= lat;
+                        tunables->down_rate_limit_us *= lat;
+                }
+	}
+
+tunables->iowait_boost_enable = policy->iowait_boost_enable;
+	tunables->silver_suspend_max_freq = DEFAULT_SUSPEND_MAX_FREQ_SILVER;
+	tunables->gold_suspend_max_freq = DEFAULT_SUSPEND_MAX_FREQ_GOLD;
+	tunables->suspend_capacity_factor = DEFAULT_SUSPEND_CAPACITY_FACTOR;
+
+	if (cpu < 2){
+		tunables->bit_shift1 = BIT_SHIFT_1;
+		tunables->bit_shift2 = BIT_SHIFT_2;
+		tunables->target_load1 = TARGET_LOAD_1;
+		tunables->target_load2 = TARGET_LOAD_2;
+	} else {
+		tunables->bit_shift1 = BIT_SHIFT_1_BIGC;
+		tunables->bit_shift2 = BIT_SHIFT_2_BIGC;
+		tunables->target_load1 = TARGET_LOAD_1_BIGC;
+		tunables->target_load2 = TARGET_LOAD_2_BIGC;
+	}
+
 	policy->governor_data = du_policy;
 	du_policy->tunables = tunables;
 
@@ -1002,13 +989,11 @@ static int dugov_init(struct cpufreq_policy *policy)
 	if (ret)
 		goto fail;
 
- out:
+out:
 	mutex_unlock(&global_tunables_lock);
-
-	cpufreq_enable_fast_switch(policy);
 	return 0;
 
- fail:
+fail:
 	policy->governor_data = NULL;
 	dugov_tunables_free(tunables);
 
@@ -1019,6 +1004,10 @@ free_du_policy:
 	mutex_unlock(&global_tunables_lock);
 
 	dugov_policy_free(du_policy);
+
+disable_fast_switch:
+	cpufreq_disable_fast_switch(policy);
+
 	pr_err("initialization failed (error %d)\n", ret);
 	return ret;
 }
@@ -1029,21 +1018,19 @@ static int dugov_exit(struct cpufreq_policy *policy)
 	struct dugov_tunables *tunables = du_policy->tunables;
 	unsigned int count;
 
-	cpufreq_disable_fast_switch(policy);
-
 	mutex_lock(&global_tunables_lock);
-	
-	store_tunables_data(du_policy->tunables, policy);
+
 	count = gov_attr_set_put(&tunables->attr_set, &du_policy->tunables_hook);
 	policy->governor_data = NULL;
 	if (!count)
 		dugov_tunables_free(tunables);
 
 	mutex_unlock(&global_tunables_lock);
-	
+
 	dugov_kthread_stop(du_policy);
 	dugov_policy_free(du_policy);
 
+	cpufreq_disable_fast_switch(policy);
 	return 0;
 }
 
@@ -1061,25 +1048,19 @@ static int dugov_start(struct cpufreq_policy *policy)
 	du_policy->next_freq = UINT_MAX;
 	du_policy->work_in_progress = false;
 	du_policy->need_freq_update = false;
+	du_policy->cached_raw_freq = 0;
 
 	for_each_cpu(cpu, policy->cpus) {
 		struct dugov_cpu *du_cpu = &per_cpu(dugov_cpu, cpu);
 
+		memset(du_cpu, 0, sizeof(*du_cpu));
 		du_cpu->du_policy = du_policy;
-		if (policy_is_shared(policy)) {
-			du_cpu->util = 0;
-			du_cpu->max = 0;
-			du_cpu->flags = SCHED_CPUFREQ_DL;
-			du_cpu->last_update = 0;
-			du_policy->cached_raw_freq = 0;
-			du_cpu->iowait_boost = 0;
-			du_cpu->iowait_boost_max = policy->cpuinfo.max_freq;
-			cpufreq_add_update_util_hook(cpu, &du_cpu->update_util,
-						     dugov_update_shared);
-		} else {
-			cpufreq_add_update_util_hook(cpu, &du_cpu->update_util,
-						     dugov_update_single);
-		}
+		du_cpu->flags = SCHED_CPUFREQ_DL;
+		du_cpu->iowait_boost_max = policy->cpuinfo.max_freq;
+		cpufreq_add_update_util_hook(cpu, &du_cpu->update_util,
+					     policy_is_shared(policy) ?
+							dugov_update_shared :
+							dugov_update_single);
 	}
 	return 0;
 }
@@ -1094,9 +1075,10 @@ static int dugov_stop(struct cpufreq_policy *policy)
 
 	synchronize_sched();
 
-	irq_work_sync(&du_policy->irq_work);
-	kthread_cancel_work_sync(&du_policy->work);
-
+	if (!policy->fast_switch_enabled) {
+		irq_work_sync(&du_policy->irq_work);
+		kthread_cancel_work_sync(&du_policy->work);
+	}
 	return 0;
 }
 
