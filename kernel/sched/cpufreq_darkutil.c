@@ -34,14 +34,14 @@ unsigned long boosted_cpu_util(int cpu);
 #define DEFAULT_SUSPEND_MAX_FREQ_GOLD	1056000
 #define DEFAULT_SUSPEND_CAPACITY_FACTOR 10
 
-#define UP_RATE_LIMIT				1000
+#define UP_RATE_LIMIT				2000
 #define DOWN_RATE_LIMIT				5000
 #define BIT_SHIFT_1 				9
 #define BIT_SHIFT_2 				9
 #define TARGET_LOAD_1				32
 #define TARGET_LOAD_2				73
 
-#define UP_RATE_LIMIT_BIGC			1000
+#define UP_RATE_LIMIT_BIGC			2000
 #define DOWN_RATE_LIMIT_BIGC			5000
 #define BIT_SHIFT_1_BIGC 			10
 #define BIT_SHIFT_2_BIGC 			6
@@ -969,11 +969,15 @@ tunables->iowait_boost_enable = policy->iowait_boost_enable;
 	tunables->suspend_capacity_factor = DEFAULT_SUSPEND_CAPACITY_FACTOR;
 
 	if (cpu < 2){
+		tunables->up_rate_limit_us = UP_RATE_LIMIT;
+		tunables->down_rate_limit_us = DOWN_RATE_LIMIT;
 		tunables->bit_shift1 = BIT_SHIFT_1;
 		tunables->bit_shift2 = BIT_SHIFT_2;
 		tunables->target_load1 = TARGET_LOAD_1;
 		tunables->target_load2 = TARGET_LOAD_2;
 	} else {
+		tunables->up_rate_limit_us = UP_RATE_LIMIT_BIGC;
+		tunables->down_rate_limit_us = DOWN_RATE_LIMIT_BIGC;
 		tunables->bit_shift1 = BIT_SHIFT_1_BIGC;
 		tunables->bit_shift2 = BIT_SHIFT_2_BIGC;
 		tunables->target_load1 = TARGET_LOAD_1_BIGC;
