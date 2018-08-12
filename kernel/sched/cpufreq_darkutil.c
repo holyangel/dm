@@ -836,12 +836,15 @@ static struct dugov_policy *dugov_policy_alloc(struct cpufreq_policy *policy)
 		return NULL;
 
 	du_policy->policy = policy;
+	init_irq_work(&du_policy->irq_work, dugov_irq_work);
+	mutex_init(&du_policy->work_lock);
 	raw_spin_lock_init(&du_policy->update_lock);
 	return du_policy;
 }
 
 static void dugov_policy_free(struct dugov_policy *du_policy)
 {
+	mutex_destroy(&du_policy->work_lock);
 	kfree(du_policy);
 }
 
@@ -875,9 +878,6 @@ static int dugov_kthread_create(struct dugov_policy *du_policy)
 
 	du_policy->thread = thread;
 	kthread_bind_mask(thread, policy->related_cpus);
-	init_irq_work(&du_policy->irq_work, dugov_irq_work);
-	mutex_init(&du_policy->work_lock);
-
 	wake_up_process(thread);
 
 	return 0;
@@ -891,7 +891,6 @@ static void dugov_kthread_stop(struct dugov_policy *du_policy)
 
 	flush_kthread_worker(&du_policy->worker);
 	kthread_stop(du_policy->thread);
-	mutex_destroy(&du_policy->work_lock);
 }
 
 static struct dugov_tunables *dugov_tunables_alloc(struct dugov_policy *du_policy)
