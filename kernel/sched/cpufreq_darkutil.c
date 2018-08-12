@@ -160,20 +160,22 @@ static void dugov_update_commit(struct dugov_policy *du_policy, u64 time,
 	if (dugov_up_down_rate_limit(du_policy, time, next_freq))
 		return;
 
-	if (du_policy->next_freq == next_freq)
-		return;
-
-	du_policy->next_freq = next_freq;
 	du_policy->last_freq_update_time = time;
 
 	if (policy->fast_switch_enabled) {
+		if (du_policy->next_freq == next_freq) {
+			trace_cpu_frequency(policy->cur, smp_processor_id());
+			return;
+		}
+		du_policy->next_freq = next_freq;
 		next_freq = cpufreq_driver_fast_switch(policy, next_freq);
 		if (next_freq == CPUFREQ_ENTRY_INVALID)
 			return;
 
 		policy->cur = next_freq;
 		trace_cpu_frequency(next_freq, smp_processor_id());
-	} else {
+	} else if (du_policy->next_freq != next_freq) {
+		du_policy->next_freq = next_freq;
 		du_policy->work_in_progress = true;
 		irq_work_queue(&du_policy->irq_work);
 	}
@@ -236,7 +238,7 @@ static unsigned int get_next_freq(struct dugov_policy *du_policy,
 	if(load < tunables->target_load1){
 		freq = (freq + (freq >> tunables->bit_shift1)) * util / max;
 	} else if (load >= tunables->target_load1 && load < tunables->target_load2){
-		freq = freq * util / max;
+		freq = (freq + (freq >> 2)) * util / max;
 	} else {
 		freq = (freq - (freq >> tunables->bit_shift2)) * util / max;
 	}
@@ -384,7 +386,7 @@ static void dugov_update_single(struct update_util_data *hook, u64 time,
 	busy = dugov_cpu_is_busy(du_cpu);
 
 	if (flags & SCHED_CPUFREQ_DL) {
-		next_f = policy->cpuinfo.max_freq;
+		next_f = get_next_freq(du_policy, util, policy->cpuinfo.max_freq);
 	} else {
 		dugov_get_util(&util, &max, time);
 		dugov_iowait_boost(du_cpu, &util, &max);
@@ -395,15 +397,18 @@ static void dugov_update_single(struct update_util_data *hook, u64 time,
 		 */
 		if (busy && next_f < du_policy->next_freq)
 			next_f = du_policy->next_freq;
+		du_policy->cached_raw_freq = 0;
 	}
 	dugov_update_commit(du_policy, time, next_f);
 }
 
-static unsigned int dugov_next_freq_shared(struct dugov_cpu *du_cpu, u64 time)
+static unsigned int dugov_next_freq_shared(struct dugov_cpu *du_cpu,
+					   unsigned long util, unsigned long max,
+					   unsigned int flags)
 {
 	struct dugov_policy *du_policy = du_cpu->du_policy;
 	struct cpufreq_policy *policy = du_policy->policy;
-	unsigned long util = 0, max = 1;
+	u64 last_freq_update_time = du_policy->last_freq_update_time;
 	unsigned int j;
 
 	for_each_cpu(j, policy->cpus) {
@@ -418,7 +423,7 @@ static unsigned int dugov_next_freq_shared(struct dugov_cpu *du_cpu, u64 time)
 		 * enough, don't take the CPU into account as it probably is
 		 * idle now (and clear iowait_boost for it).
 		 */
-		delta_ns = time - j_du_cpu->last_update;
+		delta_ns = last_freq_update_time - j_du_cpu->last_update;
 		if (delta_ns > TICK_NSEC) {
 			j_du_cpu->iowait_boost = 0;
 			j_du_cpu->iowait_boost_pending = false;
@@ -451,6 +456,11 @@ static void dugov_update_shared(struct update_util_data *hook, u64 time,
 	dugov_get_util(&util, &max, time);
 
 	raw_spin_lock(&du_policy->update_lock);
+	
+	if (flags & SCHED_IDLE) {
+		du_cpu->flags = 0;
+		goto done;
+	}
 
 	du_cpu->util = util;
 	du_cpu->max = max;
@@ -463,11 +473,11 @@ static void dugov_update_shared(struct update_util_data *hook, u64 time,
 		if (flags & SCHED_CPUFREQ_DL)
 			next_f = du_policy->policy->cpuinfo.max_freq;
 		else
-			next_f = dugov_next_freq_shared(du_cpu, time);
+			next_f = dugov_next_freq_shared(du_cpu, util, max, flags);
 
 		dugov_update_commit(du_policy, time, next_f);
 	}
-
+done:
 	raw_spin_unlock(&du_policy->update_lock);
 }
 
