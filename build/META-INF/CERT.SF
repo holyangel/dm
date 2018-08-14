@@ -1,0 +1,58 @@
+Signature-Version: 1.0
+SHA1-Digest-Manifest: BEf5arA7xBVidYX5f/4iXfY7cyU=
+Created-By: 1.0 (Android SignApk)
+
+Name: META-INF/com/google/android/updater-script
+SHA1-Digest-Manifest: Br6xNsbYLFIighT+FGsY/cB14YM=
+
+Name: anykernel.sh
+SHA1-Digest-Manifest: kNTQ3HttOVuHDiNrFxkFgTc+b2A=
+
+Name: ramdisk/WCNSS_qcom_cfg.ini
+SHA1-Digest-Manifest: 7RxF5YwJf/WEDIx/tJ+4WLGOjFc=
+
+Name: META-INF/com/google/android/update-binary
+SHA1-Digest-Manifest: 3hk30Un7jVGO2AA0YUqNnJi+oC0=
+
+Name: kernels/custom/Image.gz-dtb
+SHA1-Digest-Manifest: ryxe74LKyIdaM7loFy7qiyocnPw=
+
+Name: tools/busybox
+SHA1-Digest-Manifest: xXd3wkpvhlGfArAa8YRj3VJ1gQA=
+
+Name: banner
+SHA1-Digest-Manifest: l1xYsaNkgeogLFGJzCZFWc4M8tc=
+
+Name: tools/sepolicy-inject
+SHA1-Digest-Manifest: HfKtI71qDE2rz4moyiq/MZ28O7s=
+
+Name: version
+SHA1-Digest-Manifest: nRuvoYsM5yrsLe88IwkkDfjLMfU=
+
+Name: kernels/oos/Image.gz-dtb
+SHA1-Digest-Manifest: S3tLSJBYSJV/3YysG8lCxeeszZ8=
+
+Name: tools/mkbootimg
+SHA1-Digest-Manifest: WVtZpwCLb8kQKRMv2+KH5WGCD8Y=
+
+Name: tools/unpackbootimg
+SHA1-Digest-Manifest: TKkJX59I7Kgo/XL2U7UdGTa+hdA=
+
+Name: ramdisk/modules/wlan.ko
+SHA1-Digest-Manifest: e8lTyZL8X1uCbXtg+WEYCcDi2m0=
+
+Name: tools/ak2-core.sh
+SHA1-Digest-Manifest: LLvQ3qojBUIA2/vCbVnkI/Ae9B4=
+
+Name: patch/modules
+SHA1-Digest-Manifest: qoh9VKt1weS/E+xKt67uuA4NzfE=
+
+Name: ramdisk/init.flash.rc
+SHA1-Digest-Manifest: IJ1Xemghuwc+TXXjjpU/b3Sufk8=
+
+Name: tools/xz
+SHA1-Digest-Manifest: xwAcDmUUJqSLTxNSdAZDwNZJRIY=
+
+Name: tools/lz4
+SHA1-Digest-Manifest: CI6l5TFT52NdF6HvGhUSm6mHUU0=
+
