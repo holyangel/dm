@@ -677,7 +677,7 @@ choice
 		bool "CDG" if TCP_CONG_CDG=y
 
 	config DEFAULT_RENO
-		bool "Reno"
+		bool "Reno" if TCP_CONG_RENO=y
 endchoice
 
 endif
