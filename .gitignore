@@ -37,6 +37,7 @@ modules.builtin
 Module.symvers
 *.dwo
 *.su
+build/kernel/*.gz-dtb
 
 #
 # Top-level generic files
@@ -76,6 +77,7 @@ arch/*/include/generated
 
 # stgit generated dirs
 patches-*
+out
 
 # quilt's files
 patches
@@ -112,3 +114,8 @@ all.config
 
 # Kdevelop4
 *.kdev4
+
+upload/
+
+
+build/Changelog\.txt
